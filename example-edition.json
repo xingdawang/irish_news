@@ -1,1 +1,21 @@
-{"version":1,"edition":{"slug":"2026-10-03-0600","title":"🇮🇪 爱尔兰新闻简报｜2026-10-03 06:00｜住房 & IT 优先","scheduled_at":"2026-10-03T06:00:00+01:00","generated_at":"2026-10-03T06:04:21+01:00","cutoff_at":"2026-10-03T06:04:21+01:00"},"items":[{"event_key":"example-event","category":"housing","region":"Dublin","title":"示例标题","summary":"这是接口格式示例，不是真实新闻。","source_name":"Example","source_url":"https://example.com/article","published_at":"2026-10-03T03:20:00+01:00"}]}
+{
+  "version": 1,
+  "slug": "2026-10-03-0600",
+  "title": "🇮🇪 爱尔兰新闻简报｜2026-10-03 06:00｜住房 & IT 优先",
+  "scheduled_at": "2026-10-03T06:00:00+01:00",
+  "generated_at": "2026-10-03T06:04:21+01:00",
+  "cutoff_at": "2026-10-03T06:04:21+01:00",
+  "items": [
+    {
+      "event_key": "example-event-20261003",
+      "category": "housing",
+      "region": "Dublin",
+      "title": "示例标题",
+      "summary": "这是接口格式示例，不是真实新闻。",
+      "source_name": "Example",
+      "source_url": "https://example.com/article",
+      "published_at": "2026-10-03T03:20:00+01:00",
+      "is_update": false
+    }
+  ]
+}
