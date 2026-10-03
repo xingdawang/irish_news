@@ -38,6 +38,10 @@ SECTIONS=[
     ("https://www.irishtimes.com/business/","irishtimes.com"),
     ("https://www.irishtimes.com/ireland/dublin/","irishtimes.com"),
     ("https://www.siliconrepublic.com/","siliconrepublic.com"),
+    ("https://www.thejournal.ie/","thejournal.ie"),
+    ("https://www.thejournal.ie/tech/","thejournal.ie"),
+    ("https://www.breakingnews.ie/","breakingnews.ie"),
+    ("https://www.breakingnews.ie/news/","breakingnews.ie"),
 ]
 
 def load_env():
@@ -122,6 +126,8 @@ def section_links():
         "rte.ie": re.compile(r"^https://www\.rte\.ie/news/(?:[a-z-]+/)?20\d\d/\d{4}/\d+"),
         "irishtimes.com": re.compile(r"^https://www\.irishtimes\.com/.+/20\d\d/\d\d/\d\d/"),
         "siliconrepublic.com": re.compile(r"^https://www\.siliconrepublic\.com/[a-z0-9-]+/[a-z0-9-]+"),
+        "thejournal.ie": re.compile(r"^https://www\.thejournal\.ie/[a-z0-9-]+-\d+-[A-Za-z]{3}20\d\d/?$"),
+        "breakingnews.ie": re.compile(r"^https://www\.breakingnews\.ie/[a-z-]+/[a-z0-9-]+-\d+\.html$"),
     }
     for section,domain in SECTIONS:
         try:
@@ -132,6 +138,8 @@ def section_links():
                 href=a["href"].strip()
                 if href.startswith("/"):
                     href="https://www."+domain+href
+                elif href.startswith("//"):
+                    href="https:"+href
                 href=canonical_url(href)
                 if article_patterns[domain].search(href):
                     title=re.sub(r"\s+"," ",a.get_text(" ",strip=True))
