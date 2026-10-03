@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
+import base64
 import fcntl
-import hashlib
 import json
 import os
 import re
@@ -14,7 +14,7 @@ BASE=Path(__file__).resolve().parent
 INBOX=BASE/"inbox"
 STATE=BASE/".bridge_state.json"
 LOG=BASE/"backups"/"bridge.log"
-URL="https://raw.githubusercontent.com/xingdawang/irish_news/main/bridge/latest.json"
+URL="https://api.github.com/repos/xingdawang/irish_news/contents/bridge/latest.json?ref=main"
 SLUG_RE=re.compile(r"^\d{4}-\d{2}-\d{2}-\d{4}$")
 MAX_BYTES=256*1024
 
@@ -29,30 +29,38 @@ def main():
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError:
         return 0
-    req=Request(URL+"?t="+str(int(time.time())),headers={"Cache-Control":"no-cache","User-Agent":"irish-news-bridge/1"})
+    req=Request(URL,headers={"Accept":"application/vnd.github+json","User-Agent":"irish-news-bridge/1"})
     try:
         with urlopen(req,timeout=20) as r:
-            raw=r.read(MAX_BYTES+1)
+            meta=json.loads(r.read(MAX_BYTES+1).decode("utf-8"))
     except Exception as e:
         log("fetch_failed "+repr(e))
         return 2
-    if len(raw)>MAX_BYTES:
-        log("payload_too_large")
+    remote_sha=meta.get("sha")
+    if not isinstance(remote_sha,str) or not remote_sha:
+        log("missing_remote_sha")
         return 3
-    digest=hashlib.sha256(raw).hexdigest()
     if STATE.exists():
         try:
             s=json.loads(STATE.read_text(encoding="utf-8"))
-            if s.get("sha256")==digest:
+            if s.get("remote_sha")==remote_sha:
                 return 0
         except Exception:
             pass
+    encoded=meta.get("content","")
+    try:
+        raw=base64.b64decode(encoded,validate=False)
+    except Exception as e:
+        log("invalid_base64 "+repr(e)); return 4
+    if len(raw)>MAX_BYTES:
+        log("payload_too_large")
+        return 3
     try:
         payload=json.loads(raw.decode("utf-8"))
     except Exception as e:
         log("invalid_json "+repr(e)); return 4
     if not isinstance(payload,dict) or payload.get("noop") is True:
-        STATE.write_text(json.dumps({"sha256":digest,"status":"noop"}),encoding="utf-8")
+        STATE.write_text(json.dumps({"remote_sha":remote_sha,"status":"noop"}),encoding="utf-8")
         return 0
     slug=payload.get("slug","")
     if not SLUG_RE.fullmatch(slug):
@@ -71,7 +79,7 @@ def main():
         log("invalid_publisher_output slug="+slug); return 7
     if not result.get("ok") or result.get("status") not in {"created","exists"}:
         log("unexpected_publisher_output slug="+slug+" output="+p.stdout.strip()[:1200]); return 8
-    STATE.write_text(json.dumps({"sha256":digest,"slug":slug,"status":result.get("status"),"processed_at":time.time()}),encoding="utf-8")
+    STATE.write_text(json.dumps({"remote_sha":remote_sha,"slug":slug,"status":result.get("status"),"processed_at":time.time()}),encoding="utf-8")
     log("published slug="+slug+" status="+str(result.get("status"))+" items="+str(result.get("items")))
     return 0
 
