@@ -14,7 +14,7 @@ BASE=Path(__file__).resolve().parent
 INBOX=BASE/"inbox"
 STATE=BASE/".bridge_state.json"
 LOG=BASE/"backups"/"bridge.log"
-URL="https://api.github.com/repos/xingdawang/irish_news/contents/bridge/latest.json?ref=main"
+URL="https://api.github.com/repos/xingdawang/time/contents/chatgpt_write_test_20261002.txt?ref=main"
 SLUG_RE=re.compile(r"^\d{4}-\d{2}-\d{2}-\d{4}$")
 MAX_BYTES=256*1024
 
