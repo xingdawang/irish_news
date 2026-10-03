@@ -26,9 +26,17 @@ MAX_CANDIDATES=80
 MAX_ARTICLE_CHARS=5000
 
 QUERIES=[
-    '(Dublin OR Ireland) (housing OR homes OR apartments OR planning OR rent OR rental OR "cost rental" OR development)',
-    '(Dublin OR Ireland) (AI OR "artificial intelligence" OR software OR technology OR cybersecurity OR data OR cloud OR SaaS OR semiconductor OR jobs OR hiring)',
-    '(Dublin OR Ireland) (transport OR health OR hospital OR crime OR court OR economy OR public services)',
+    '(Dublin OR Ireland) (housing OR homes OR apartments OR planning OR rent OR technology OR AI OR software OR jobs OR health OR transport)',
+]
+
+SECTIONS=[
+    ("https://www.rte.ie/news/","rte.ie"),
+    ("https://www.rte.ie/news/business/","rte.ie"),
+    ("https://www.rte.ie/news/dublin/","rte.ie"),
+    ("https://www.irishtimes.com/ireland/housing-planning/","irishtimes.com"),
+    ("https://www.irishtimes.com/business/","irishtimes.com"),
+    ("https://www.irishtimes.com/ireland/dublin/","irishtimes.com"),
+    ("https://www.siliconrepublic.com/","siliconrepublic.com"),
 ]
 
 def load_env():
@@ -58,6 +66,24 @@ def extract_article(url):
             return None
         final=canonical_url(r.url)
         soup=BeautifulSoup(r.text,"html.parser")
+        published=None
+        for attrs in (
+            {"property":"article:published_time"},{"name":"article:published_time"},
+            {"name":"date"},{"itemprop":"datePublished"},
+        ):
+            m=soup.find("meta",attrs=attrs)
+            if m and m.get("content"):
+                published=m["content"].strip(); break
+        if not published:
+            for node in soup.find_all("script",attrs={"type":"application/ld+json"}):
+                try:
+                    data=json.loads(node.get_text() or "{}")
+                    stack=data if isinstance(data,list) else [data]
+                    for obj in stack:
+                        if isinstance(obj,dict) and obj.get("datePublished"):
+                            published=str(obj["datePublished"]); break
+                    if published: break
+                except Exception: pass
         for tag in soup(["script","style","noscript","svg","nav","footer","header","form"]): tag.decompose()
         title=""
         og=soup.find("meta",attrs={"property":"og:title"})
@@ -70,9 +96,34 @@ def extract_article(url):
             if sum(map(len,parts))>=MAX_ARTICLE_CHARS: break
         text="\n".join(parts)[:MAX_ARTICLE_CHARS]
         if len(text)<180: return None
-        return {"url":final,"title":title[:400],"text":text}
+        return {"url":final,"title":title[:400],"text":text,"published_at":published}
     except Exception:
         return None
+
+def section_links():
+    found={}
+    article_patterns={
+        "rte.ie": re.compile(r"^https://www\.rte\.ie/news/(?:[a-z-]+/)?20\d\d/\d{4}/\d+"),
+        "irishtimes.com": re.compile(r"^https://www\.irishtimes\.com/.+/20\d\d/\d\d/\d\d/"),
+        "siliconrepublic.com": re.compile(r"^https://www\.siliconrepublic\.com/[a-z0-9-]+/[a-z0-9-]+"),
+    }
+    for section,domain in SECTIONS:
+        try:
+            r=requests.get(section,headers={"User-Agent":UA,"Accept-Language":"en-IE,en;q=0.9"},timeout=20)
+            if r.status_code!=200: continue
+            soup=BeautifulSoup(r.text,"html.parser")
+            for a in soup.find_all("a",href=True):
+                href=a["href"].strip()
+                if href.startswith("/"):
+                    href="https://www."+domain+href
+                href=canonical_url(href)
+                if article_patterns[domain].search(href):
+                    title=re.sub(r"\s+"," ",a.get_text(" ",strip=True))
+                    if len(title)>=18:
+                        found.setdefault(href,{"url":href,"gdelt_title":title,"seen_date":None,"domain":domain,"sourcecountry":"Ireland","score":score({"title":title,"domain":domain})})
+        except Exception as e:
+            print("SECTION_ERROR",section,repr(e),file=sys.stderr)
+    return list(found.values())
 
 def recent_events(days=14):
     con=sqlite3.connect(DB); con.row_factory=sqlite3.Row
@@ -93,32 +144,35 @@ def score(a):
     return n
 
 def collect_candidates():
-    seen={}
-    for span in ("6h","24h","48h"):
-        for q in QUERIES:
-            try: arts=fetch_gdelt(q,span)
-            except Exception as e:
-                print("GDELT_ERROR",span,q,repr(e),file=sys.stderr); continue
+    seen={canonical_url(x["url"]):x for x in section_links()}
+    if len(seen)<35:
+        try:
+            arts=fetch_gdelt(QUERIES[0],"24h")
             for a in arts:
                 u=a.get("url") or ""
                 if not u.startswith(("http://","https://")): continue
                 cu=canonical_url(u)
-                if cu not in seen:
-                    seen[cu]={
-                        "url":u,"gdelt_title":a.get("title",""),"seen_date":a.get("seendate"),
-                        "domain":a.get("domain",""),"sourcecountry":a.get("sourcecountry",""),
-                        "score":score(a),
-                    }
-        if len(seen)>=45: break
+                seen.setdefault(cu,{"url":u,"gdelt_title":a.get("title",""),"seen_date":a.get("seendate"),
+                    "domain":a.get("domain",""),"sourcecountry":a.get("sourcecountry",""),"score":score(a)})
+        except Exception as e:
+            print("GDELT_FALLBACK_ERROR",repr(e),file=sys.stderr)
     ordered=sorted(seen.values(),key=lambda x:(x["score"],x.get("seen_date") or ""),reverse=True)[:MAX_CANDIDATES]
+    cutoff=datetime.now(DUBLIN)-timedelta(hours=50)
     out=[]
     for a in ordered:
         page=extract_article(a["url"])
         if not page: continue
+        pub=page.get("published_at")
+        if pub:
+            try:
+                dt=datetime.fromisoformat(str(pub).replace("Z","+00:00"))
+                if dt.tzinfo is None: dt=dt.replace(tzinfo=DUBLIN)
+                if dt.astimezone(DUBLIN)<cutoff: continue
+            except Exception: pass
         page.update({k:a.get(k) for k in ("gdelt_title","seen_date","domain","sourcecountry","score")})
         out.append(page)
         if len(out)>=45: break
-        time.sleep(0.15)
+        time.sleep(0.1)
     return out
 
 def llm_select(slot,candidates,previous):
