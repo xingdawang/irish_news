@@ -1,104 +1,142 @@
 # Irish News
 
-爱尔兰新闻简报网站与受保护的发布 API。生产服务使用 **FastAPI + SQLite + Uvicorn**，现有外部入口为 Nginx 5310，应用监听 127.0.0.1:8200。
+爱尔兰新闻简报网站。当前架构是 **JSON-first**：网站不负责生成新闻，只负责接收、校验、存档和展示标准 JSON。
 
-## 关键行为
+## 架构
 
-- 每期按 Dublin 时区固定在 00:00 / 06:00 / 12:00 / 18:00。
-- `POST /api/news/publish` 只接受 Bearer Token 认证。
-- `published_at` 由服务器在数据库事务成功时生成；网页“是否陈旧”只看真实发布成功时间，不看模型生成时间。
-- 同一个 slug + 完全相同内容可安全重试，返回 `status=exists`。
-- 同一个 slug + 不同内容返回 HTTP 409，禁止静默覆盖历史。
-- 跨期相同 `event_key` 或相同文章 URL 默认返回 HTTP 409。
-- 同一真实事件确有新事实时，保留原 `event_key`，设置 `is_update=true`，并提供 `update_note`。
-- SQLite 写入使用 `BEGIN IMMEDIATE`、WAL、foreign_keys 和 busy_timeout，避免并发写入破坏数据。
-- 历史期数、上一期/下一期、已读/未读标记继续保留。
+```
+新闻生成端
+   ↓ 标准 JSON
+POST /api/news/publish
+   ↓
+json_data/editions/<slug>.json
+   ↓
+FastAPI 页面与读取 API
+```
 
-## 公开读取接口
+运行时的正式内容源是 `json_data/`，不再依赖 SQLite 才能展示。旧 `news.db` 保留作为历史迁移和回滚备份。
 
-- `GET /health`
-- `GET /api/latest`
-- `GET /api/editions`
-- `GET /api/events/recent?days=14`
+## JSON 格式
 
-## 发布接口
+每一期使用固定结构：
+
+```json
+{
+  "version": 1,
+  "slug": "2026-10-03-1800",
+  "title": "🇮🇪 爱尔兰新闻简报｜2026-10-03 18:00｜住房 & IT 优先",
+  "scheduled_at": "2026-10-03T18:00:00+01:00",
+  "generated_at": "2026-10-03T18:05:00+01:00",
+  "cutoff_at": "2026-10-03T18:05:00+01:00",
+  "items": [
+    {
+      "event_key": "stable-event-key",
+      "category": "housing",
+      "region": "Dublin",
+      "title": "中文标题",
+      "summary": "1–2 句中文摘要",
+      "source_name": "Source",
+      "source_url": "https://example.com/exact-article",
+      "published_at": "2026-10-03T16:30:00+01:00",
+      "is_update": false
+    }
+  ]
+}
+```
+
+只有同一真实事件出现明确新事实、新决定、新数据或新阶段时，才允许再次出现。此时沿用原 `event_key`，设置 `is_update=true`，并增加 `update_note`。
+
+## 网站功能
+
+现有功能全部保留：
+
+- 最新一期
+- 住房 / IT / 其他分类筛选
+- 历史简报
+- 今天 / 最近 3 天 / 最近 7 天 / 全部
+- 上一期 / 下一期
+- 浏览器本地已读 / 未读标记
+- 原文详情页链接
+- 实际发布时间和 stale 提示
+- 跨期 event_key / URL 去重
+- 同一期幂等重放
+
+## 写入 API
 
 `POST /api/news/publish`
 
-Header:
+Headers:
 
 ```
-Authorization: Bearer <secret>
+Authorization: Bearer <publish token>
 Content-Type: application/json
 ```
 
-请求格式见 `example-edition.json`。新一期 slug 必须与 Dublin 排期一致，例如：
-
-```
-2026-10-03-0600
-```
-
-标题必须严格使用：
-
-```
-🇮🇪 爱尔兰新闻简报｜2026-10-03 06:00｜住房 & IT 优先
-```
-
-## Token
-
-生产服务器默认从：
+发布 Token 只保存在服务器：
 
 ```
 /home/ubuntu/ireland-news/.publish_token
 ```
 
-读取 Token，也可通过 `IRELAND_NEWS_PUBLISH_TOKEN` 环境变量覆盖。Token 文件必须权限 600，并且永远不要提交 GitHub。
+Token 不进入 GitHub。
 
-生成示例：
+同一个 slug：
 
-```bash
-python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > .publish_token
-chmod 600 .publish_token
+- 完全相同 JSON 重放：返回 `status=exists`
+- 内容不同：HTTP 409
+- 跨期重复事件但没有 `is_update=true`：HTTP 409
+
+## 读取 API
+
+- `GET /health`
+- `GET /api/latest`
+- `GET /api/editions`
+- `GET /api/editions/<slug>`
+- `GET /api/events/recent?days=14`
+
+## 数据目录
+
+```
+json_data/
+├── index.json
+└── editions/
+    ├── 2026-10-03-0000.json
+    ├── 2026-10-03-0600.json
+    └── ...
 ```
 
-## 本地运行
+每一期 JSON 是独立、可读、可备份、可回滚的文件。写入使用文件锁和原子替换，避免半写入文件。
+
+## 从旧 SQLite 迁移
+
+```bash
+./.venv/bin/python migrate_sqlite_to_json.py \
+  --db news.db \
+  --out json_data
+```
+
+迁移不会删除或修改原 `news.db`。
+
+## 本地启动
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
-python3 -c 'import secrets; print(secrets.token_urlsafe(48))' > .publish_token
-chmod 600 .publish_token
 uvicorn app:app --host 127.0.0.1 --port 8200
 ```
 
-本机发布：
+默认外部入口仍由 Nginx 的 5310 反向代理到 127.0.0.1:8200。
 
-```bash
-./publish.py example-edition.json
-```
+## 备份
 
-## 生产部署原则
+`backup_db.py` 同时备份：
 
-1. 先备份 `news.db` 与当前代码。
-2. 在临时数据库上运行导入/迁移测试。
-3. 更新代码后重启 Uvicorn 服务。
-4. 验证 `/health`、首页、历史页、鉴权失败、真实 POST、幂等重试。
-5. 最后再把定时任务切到发布 API。
+- 旧 SQLite：`news-*.db.gz`
+- JSON 数据：`json-news-*.tar.gz`
 
-外网发布接口必须使用公网可信 TLS。自签名证书只适合人工浏览/内网测试，不应作为自动发布连接器的最终入口。
+默认保留 60 天。
 
-## 数据文件
+## 设计原则
 
-`news.db`、WAL/SHM、Token 和备份均在 `.gitignore` 中，不进入仓库。
-
-
-## 临时进程守护
-
-正常生产环境优先由 `ireland-news.service` 管理 Uvicorn。若维护连接没有 systemd 启动权限，可安装 `deploy/ensure-running.sh` 到应用目录，并在用户 crontab 每分钟调用一次作为故障兜底：
-
-```cron
-* * * * * /home/ubuntu/ireland-news/ensure_running.sh
-```
-
-该脚本只在 Uvicorn 进程不存在时启动备用进程，并用 `flock` 防止并发重复启动。它是故障兜底，不替代 systemd。
+新闻生成端和网站完全解耦。网站不需要 LLM API Key，也不关心 JSON 是由 ChatGPT、其他模型、脚本还是人工生成；只要 JSON 符合 schema，网站就能解析、存档并保持现有展示功能。

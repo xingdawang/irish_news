@@ -26,6 +26,10 @@ def canonical_url(value:str)->str:
 def utc_now_iso()->str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00","Z")
 
+def payload_digest(payload:dict)->str:
+    body={k:v for k,v in payload.items() if k!="sort_ts"}
+    return hashlib.sha256(json.dumps(body,ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")).hexdigest()
+
 class JsonNewsStore:
     def __init__(self, root:Path):
         self.root=Path(root)
@@ -104,7 +108,7 @@ class JsonNewsStore:
         return out
 
     def publish(self,payload:dict):
-        digest=hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(",",":")).encode("utf-8")).hexdigest()
+        digest=payload_digest(payload)
         lock=self._lock()
         try:
             existing=self.get(payload["slug"])
@@ -116,6 +120,8 @@ class JsonNewsStore:
             current_sort=int(payload["sort_ts"])
             incoming_events={x["event_key"]:x for x in payload["items"]}
             incoming_urls={canonical_url(x["source_url"]):x for x in payload["items"]}
+            required_update_keys={x["event_key"] for x in payload["items"] if x.get("is_update")}
+            matched_older_updates=set()
             for meta in self.list_editions():
                 record=self.get(meta["slug"])
                 if not record: continue
@@ -126,12 +132,16 @@ class JsonNewsStore:
                     if ek in incoming_events:
                         item=incoming_events[ek]
                         if item.get("is_update"):
-                            if not older:
-                                raise ValueError(f"is_update requires the same event_key in an older edition: {ek}")
+                            if older: matched_older_updates.add(ek)
                         else:
                             raise ValueError(f"cross-edition duplicate requires is_update=true: {ek}")
-                    if cu and cu in incoming_urls and not incoming_urls[cu].get("is_update"):
-                        raise ValueError(f"cross-edition duplicate requires is_update=true: {incoming_urls[cu]['source_url']}")
+                    if cu and cu in incoming_urls:
+                        item=incoming_urls[cu]
+                        if not item.get("is_update"):
+                            raise ValueError(f"cross-edition duplicate requires is_update=true: {item['source_url']}")
+            missing=sorted(required_update_keys-matched_older_updates)
+            if missing:
+                raise ValueError(f"is_update requires the same event_key in an older edition: {missing[0]}")
 
             published=utc_now_iso()
             record={
