@@ -60,6 +60,19 @@ def fetch_gdelt(query,timespan):
     data=r.json()
     return data.get("articles",[]) if isinstance(data,dict) else []
 
+def infer_published_from_url(url):
+    try:
+        p=urlsplit(url).path
+        m=re.search(r"/(20\d\d)/(\d\d)/(\d\d)/",p)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}T00:00:00+00:00"
+        m=re.search(r"/(20\d\d)/(\d{2})(\d{2})/",p)
+        if m:
+            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}T00:00:00+00:00"
+    except Exception:
+        pass
+    return None
+
 def extract_article(url):
     try:
         r=requests.get(url,headers={"User-Agent":UA,"Accept-Language":"en-IE,en;q=0.9"},timeout=8,allow_redirects=True)
@@ -85,6 +98,8 @@ def extract_article(url):
                             published=str(obj["datePublished"]); break
                     if published: break
                 except Exception: pass
+        if not published:
+            published=infer_published_from_url(final)
         for tag in soup(["script","style","noscript","svg","nav","footer","header","form"]): tag.decompose()
         title=""
         og=soup.find("meta",attrs={"property":"og:title"})
@@ -164,12 +179,14 @@ def collect_candidates():
         page=extract_article(a["url"])
         if not page: return None
         pub=page.get("published_at")
-        if pub:
-            try:
-                dt=datetime.fromisoformat(str(pub).replace("Z","+00:00"))
-                if dt.tzinfo is None: dt=dt.replace(tzinfo=DUBLIN)
-                if dt.astimezone(DUBLIN)<cutoff: return None
-            except Exception: pass
+        if not pub:
+            return None
+        try:
+            dt=datetime.fromisoformat(str(pub).replace("Z","+00:00"))
+            if dt.tzinfo is None: dt=dt.replace(tzinfo=DUBLIN)
+            if dt.astimezone(DUBLIN)<cutoff: return None
+        except Exception:
+            return None
         page.update({k:a.get(k) for k in ("gdelt_title","seen_date","domain","sourcecountry","score")})
         return page
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
