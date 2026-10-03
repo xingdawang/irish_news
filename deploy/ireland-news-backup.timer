@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Ireland News database backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 Europe/Dublin
+Persistent=true
+RandomizedDelaySec=300
+Unit=ireland-news-backup.service
+
+[Install]
+WantedBy=timers.target
