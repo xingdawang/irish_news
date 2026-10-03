@@ -3,7 +3,7 @@ import argparse
 import json
 import sqlite3
 from pathlib import Path
-from json_store import JsonNewsStore, canonical_url
+from json_store import JsonNewsStore, payload_digest
 
 def epoch_for(value):
     from datetime import datetime
@@ -51,9 +51,12 @@ def main():
             "published_at":ed["published_at"] if "published_at" in ed.keys() and ed["published_at"] else generated,
             "item_count":len(items),
             "sort_ts":int(sort_ts or 0),
-            "payload_hash":ed["payload_hash"] if "payload_hash" in ed.keys() else None,
+            "payload_hash":None,
             "items":items,
         }
+        digest_input={k:record[k] for k in ("version","slug","title","scheduled_at","generated_at","cutoff_at","items")}
+        digest_input["sort_ts"]=record["sort_ts"]
+        record["payload_hash"]=payload_digest(digest_input)
         store.import_record(record); count+=1
         print("migrated",record["slug"],len(items))
     con.close()
