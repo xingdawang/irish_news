@@ -1,1 +1,2 @@
-Flask==3.1.2\ngunicorn==23.0.0\n
+fastapi==0.118.0
+uvicorn[standard]==0.37.0

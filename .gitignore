@@ -1,1 +1,14 @@
-.env\n.venv/\n__pycache__/\n*.pyc\ndata/latest.json\ndata/index.json\ndata/editions/*.json\n
+.env
+.publish_token
+.venv/
+__pycache__/
+*.pyc
+news.db
+news.db-wal
+news.db-shm
+*.db
+*.db.gz
+backups/
+*.bak-*
+edition-*.json
+feed_url.txt
