@@ -9,3 +9,6 @@ news.db-shm
 *.db
 *.db.gz
 backups/
+*.bak-*
+edition-*.json
+feed_url.txt
