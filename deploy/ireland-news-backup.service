@@ -1,0 +1,10 @@
+[Unit]
+Description=Backup Ireland News SQLite database
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/ireland-news
+ExecStart=/usr/bin/python3 /home/ubuntu/ireland-news/backup_db.py
