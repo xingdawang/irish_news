@@ -2,12 +2,12 @@
 set -euo pipefail
 cd /home/ubuntu/ireland-news
 ENV=.generator.env
-printf 'LLM base URL [https://api.deepseek.com/v1]: '
+printf 'LLM base URL [https://api.deepseek.com]: '
 read -r BASE_URL
-BASE_URL=${BASE_URL:-https://api.deepseek.com/v1}
-printf 'LLM model [deepseek-chat]: '
+BASE_URL=${BASE_URL:-https://api.deepseek.com}
+printf 'LLM model [deepseek-flash]: '
 read -r MODEL
-MODEL=${MODEL:-deepseek-chat}
+MODEL=${MODEL:-deepseek-flash}
 printf 'LLM API key (hidden): '
 read -rs API_KEY
 printf '\n'
