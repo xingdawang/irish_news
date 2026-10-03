@@ -215,8 +215,10 @@ def llm_select(slot,candidates,previous):
     model=os.environ.get("LLM_MODEL","")
     if not (base and key and model):
         raise RuntimeError("LLM_BASE_URL, LLM_API_KEY and LLM_MODEL must be configured")
+    prior_urls={canonical_url(x.get("source_url") or "") for x in previous if x.get("source_url")}
+    candidates=[x for x in candidates if canonical_url(x["url"]) not in prior_urls]
     compact=[{"id":i,"url":x["url"],"title":x["title"] or x["gdelt_title"],"domain":x["domain"],
-              "seen_date":x["seen_date"],"text":x["text"][:3000]} for i,x in enumerate(candidates)]
+              "seen_date":x["seen_date"],"published_at":x.get("published_at"),"text":x["text"][:3000]} for i,x in enumerate(candidates)]
     prior=[{"event_key":x["event_key"],"title":x["title"],"source_url":x["source_url"],"slug":x["slug"]} for x in previous]
     system="""You are the editor of a private Chinese Ireland news digest. Select only genuinely new, high-value Ireland stories from the supplied verified article pages. Never invent facts or URLs. Strictly deduplicate against previous events. If the same real-world event has a material new fact/decision/data/stage, reuse the previous event_key, set is_update=true and explain update_note. Otherwise create a short stable lowercase ASCII event_key. Prioritize Greater Dublin (target 60-70%), housing/planning (25-35%), and IT/AI/software/data/cyber/jobs (20-30%), but never pad with weak or old stories. Sports max 1. Political/public-policy stories must be neutral factual summaries. Output JSON only."""
     user={"slot":slot.isoformat(),"requirements":{"target_items":"8-18, fewer if insufficient","categories":["housing","tech","other"]},
@@ -251,7 +253,7 @@ def build_payload(slot, selected, candidates):
         item={"event_key":event_key,"category":category,"region":str(x.get("region") or "Ireland")[:160],
               "title":str(x.get("title") or "")[:300],"summary":str(x.get("summary") or "")[:2500],
               "source_name":str(x.get("source_name") or c.get("domain") or "Source")[:160],
-              "source_url":url,"published_at":x.get("published_at"),"is_update":is_update}
+              "source_url":url,"published_at":c.get("published_at"),"is_update":is_update}
         if is_update:
             note=str(x.get("update_note") or "").strip()
             if not note: continue
@@ -265,12 +267,26 @@ def build_payload(slot, selected, candidates):
 
 def publish(payload):
     token=TOKEN_FILE.read_text(encoding="utf-8").strip()
-    r=requests.post(PUBLISH_URL,headers={"Authorization":"Bearer "+token,"Content-Type":"application/json"},json=payload,timeout=60)
-    if r.status_code!=200:
+    headers={"Authorization":"Bearer "+token,"Content-Type":"application/json"}
+    for attempt in range(2):
+        r=requests.post(PUBLISH_URL,headers=headers,json=payload,timeout=60)
+        if r.status_code==200:
+            data=r.json()
+            if not data.get("ok"): raise RuntimeError("publish did not return ok")
+            return data
+        if r.status_code==409 and attempt==0:
+            detail=""
+            try: detail=str(r.json().get("detail",""))
+            except Exception: pass
+            marker="cross-edition duplicate requires is_update=true: "
+            if marker in detail:
+                dup=detail.split(marker,1)[1].strip()
+                before=len(payload["items"])
+                payload["items"]=[x for x in payload["items"] if x.get("event_key")!=dup and canonical_url(x.get("source_url",""))!=canonical_url(dup)]
+                if payload["items"] and len(payload["items"])<before:
+                    continue
         raise RuntimeError(f"publish HTTP {r.status_code}: {r.text[:1000]}")
-    data=r.json()
-    if not data.get("ok"): raise RuntimeError("publish did not return ok")
-    return data
+    raise RuntimeError("publish retry exhausted")
 
 def slot_for_now(now):
     hour=max(h for h in (0,6,12,18) if h<=now.hour)
@@ -285,10 +301,20 @@ def main():
     now=datetime.now(DUBLIN)
     slot=datetime.fromisoformat(args.slot) if args.slot else slot_for_now(now)
     if slot.tzinfo is None: slot=slot.replace(tzinfo=DUBLIN)
+    con=sqlite3.connect(DB)
+    exists=con.execute("select 1 from editions where slug=?",(slot.strftime("%Y-%m-%d-%H%M"),)).fetchone()
+    con.close()
+    if exists and not args.dry_run:
+        print(json.dumps({"stage":"exists","slug":slot.strftime("%Y-%m-%d-%H%M")}))
+        return
     candidates=collect_candidates()
     print(json.dumps({"stage":"candidates","count":len(candidates),"top":[{"title":x["title"],"url":x["url"]} for x in candidates[:8]]},ensure_ascii=False))
     if args.dry_run: return
-    selected=llm_select(slot,candidates,recent_events())
+    previous=recent_events()
+    prior_urls={canonical_url(x.get("source_url") or "") for x in previous if x.get("source_url")}
+    candidates=[x for x in candidates if canonical_url(x["url"]) not in prior_urls]
+    if not candidates: raise RuntimeError("no new candidates after exact URL dedup")
+    selected=llm_select(slot,candidates,previous)
     payload=build_payload(slot,selected,candidates)
     if not payload["items"]: raise RuntimeError("LLM selected no valid items")
     result=publish(payload)
