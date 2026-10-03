@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import concurrent.futures
 import json
 import os
 import re
@@ -22,7 +23,7 @@ TOKEN_FILE=Path(os.environ.get("IRELAND_NEWS_TOKEN_FILE",BASE/".publish_token")
 GDELT="https://api.gdeltproject.org/api/v2/doc/doc"
 DUBLIN=__import__("zoneinfo").ZoneInfo("Europe/Dublin")
 UA="IrelandNewsGenerator/1.0 (+personal news digest)"
-MAX_CANDIDATES=80
+MAX_CANDIDATES=50
 MAX_ARTICLE_CHARS=5000
 
 QUERIES=[
@@ -54,14 +55,14 @@ def canonical_url(url):
 
 def fetch_gdelt(query,timespan):
     params={"query":query,"mode":"artlist","format":"json","maxrecords":"250","sort":"datedesc","timespan":timespan}
-    r=requests.get(GDELT,params=params,headers={"User-Agent":UA},timeout=30)
+    r=requests.get(GDELT,params=params,headers={"User-Agent":UA},timeout=12)
     r.raise_for_status()
     data=r.json()
     return data.get("articles",[]) if isinstance(data,dict) else []
 
 def extract_article(url):
     try:
-        r=requests.get(url,headers={"User-Agent":UA,"Accept-Language":"en-IE,en;q=0.9"},timeout=20,allow_redirects=True)
+        r=requests.get(url,headers={"User-Agent":UA,"Accept-Language":"en-IE,en;q=0.9"},timeout=8,allow_redirects=True)
         if r.status_code!=200 or "text/html" not in r.headers.get("content-type",""):
             return None
         final=canonical_url(r.url)
@@ -109,7 +110,7 @@ def section_links():
     }
     for section,domain in SECTIONS:
         try:
-            r=requests.get(section,headers={"User-Agent":UA,"Accept-Language":"en-IE,en;q=0.9"},timeout=20)
+            r=requests.get(section,headers={"User-Agent":UA,"Accept-Language":"en-IE,en;q=0.9"},timeout=10)
             if r.status_code!=200: continue
             soup=BeautifulSoup(r.text,"html.parser")
             for a in soup.find_all("a",href=True):
@@ -159,21 +160,29 @@ def collect_candidates():
     ordered=sorted(seen.values(),key=lambda x:(x["score"],x.get("seen_date") or ""),reverse=True)[:MAX_CANDIDATES]
     cutoff=datetime.now(DUBLIN)-timedelta(hours=50)
     out=[]
-    for a in ordered:
+    def enrich(a):
         page=extract_article(a["url"])
-        if not page: continue
+        if not page: return None
         pub=page.get("published_at")
         if pub:
             try:
                 dt=datetime.fromisoformat(str(pub).replace("Z","+00:00"))
                 if dt.tzinfo is None: dt=dt.replace(tzinfo=DUBLIN)
-                if dt.astimezone(DUBLIN)<cutoff: continue
+                if dt.astimezone(DUBLIN)<cutoff: return None
             except Exception: pass
         page.update({k:a.get(k) for k in ("gdelt_title","seen_date","domain","sourcecountry","score")})
-        out.append(page)
-        if len(out)>=45: break
-        time.sleep(0.1)
-    return out
+        return page
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
+        futures=[ex.submit(enrich,a) for a in ordered]
+        for fut in concurrent.futures.as_completed(futures):
+            try: page=fut.result()
+            except Exception: page=None
+            if page: out.append(page)
+            if len(out)>=35:
+                for other in futures: other.cancel()
+                break
+    out.sort(key=lambda x:(x.get("score",0),x.get("published_at") or x.get("seen_date") or ""),reverse=True)
+    return out[:35]
 
 def llm_select(slot,candidates,previous):
     base=os.environ.get("LLM_BASE_URL","").rstrip("/")
