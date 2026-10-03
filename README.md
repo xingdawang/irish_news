@@ -91,3 +91,14 @@ uvicorn app:app --host 127.0.0.1 --port 8200
 ## 数据文件
 
 `news.db`、WAL/SHM、Token 和备份均在 `.gitignore` 中，不进入仓库。
+
+
+## 临时进程守护
+
+正常生产环境优先由 `ireland-news.service` 管理 Uvicorn。若维护连接没有 systemd 启动权限，可安装 `deploy/ensure-running.sh` 到应用目录，并在用户 crontab 每分钟调用一次作为故障兜底：
+
+```cron
+* * * * * /home/ubuntu/ireland-news/ensure_running.sh
+```
+
+该脚本只在 Uvicorn 进程不存在时启动备用进程，并用 `flock` 防止并发重复启动。它是故障兜底，不替代 systemd。
