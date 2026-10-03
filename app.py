@@ -15,6 +15,7 @@ from json_store import JsonNewsStore, canonical_url
 BASE=Path(__file__).resolve().parent
 DATA_ROOT=Path(os.environ.get("IRELAND_NEWS_JSON_DIR",BASE/"json_data"))
 TOKEN_FILE=Path(os.environ.get("IRELAND_NEWS_TOKEN_FILE",BASE/".publish_token"))
+BROWSER_TOKEN_FILE=Path(os.environ.get("IRELAND_NEWS_BROWSER_TOKEN_FILE",BASE/".browser_publish_token"))
 DUBLIN=ZoneInfo("Europe/Dublin")
 STALE_HOURS=int(os.environ.get("IRELAND_NEWS_STALE_HOURS","8"))
 MAX_BODY_BYTES=int(os.environ.get("IRELAND_NEWS_MAX_BODY_BYTES","1048576"))
@@ -186,6 +187,44 @@ def archive_keep(ed,window):
     if not dt: return True
     delta=(datetime.now(DUBLIN).date()-dt.date()).days
     return {"today":delta==0,"3d":0<=delta<3,"7d":0<=delta<7}.get(window,True)
+
+
+def get_browser_publish_token():
+    env=os.environ.get("IRELAND_NEWS_BROWSER_PUBLISH_TOKEN","").strip()
+    if env: return env
+    try: return BROWSER_TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except OSError: return ""
+
+def browser_publish_page(message="",ok=False):
+    tone="#067647" if ok else "#b42318"
+    msg=f'<div style="margin:0 0 16px;padding:12px 14px;border-radius:10px;background:#f8fafc;color:{tone};font-size:14px">{esc(message)}</div>' if message else ""
+    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ireland News JSON Publish</title>
+<style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f8;color:#13202f;margin:0}}.box{{max-width:820px;margin:40px auto;background:#fff;padding:24px;border-radius:18px;border:1px solid #e7eaf0}}h1{{margin-top:0}}label{{font-weight:700;display:block;margin:14px 0 6px}}input,textarea{{width:100%;box-sizing:border-box;border:1px solid #d0d5dd;border-radius:10px;padding:11px;font:inherit}}textarea{{min-height:420px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}}button{{margin-top:16px;background:#0b6bcb;color:#fff;border:0;border-radius:10px;padding:11px 18px;font-weight:700;cursor:pointer}}.hint{{color:#667085;font-size:13px;line-height:1.5}}</style></head><body><main class="box"><h1>🇮🇪 JSON 发布</h1><p class="hint">只接受标准 Ireland News JSON。发布成功后会进入与网站相同的去重、校验和历史存档流程。</p>{msg}<form method="post" action="/publish-ui"><label>发布口令</label><input name="token" type="password" autocomplete="off" required><label>JSON</label><textarea name="payload" spellcheck="false" required></textarea><button type="submit">发布到网站</button></form></main></body></html>'''
+
+@app.get("/publish-ui",response_class=HTMLResponse)
+def publish_ui_get():
+    return browser_publish_page()
+
+@app.post("/publish-ui",response_class=HTMLResponse)
+async def publish_ui_post(request:Request):
+    expected=get_browser_publish_token()
+    if not expected or len(expected)<32:
+        raise HTTPException(status_code=503,detail="browser publish token is not configured")
+    form=await request.form()
+    supplied=str(form.get("token") or "")
+    if not secrets.compare_digest(supplied,expected):
+        raise HTTPException(status_code=401,detail="invalid publish token")
+    raw=str(form.get("payload") or "")
+    if len(raw.encode("utf-8"))>MAX_BODY_BYTES:
+        raise HTTPException(status_code=413,detail="request body too large")
+    try:
+        payload=normalize_payload(json.loads(raw))
+        result=store.publish(payload)
+        return browser_publish_page(f"发布成功：{result['slug']} · {result['items']} 条 · {result['status']}",ok=True)
+    except json.JSONDecodeError:
+        return browser_publish_page("JSON 格式错误",ok=False)
+    except ValueError as exc:
+        return browser_publish_page(str(exc),ok=False)
 
 @app.get("/health")
 def health():
