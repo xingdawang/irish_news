@@ -12,3 +12,4 @@ backups/
 *.bak-*
 edition-*.json
 feed_url.txt
+json_data/
