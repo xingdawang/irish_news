@@ -13,3 +13,4 @@ backups/
 edition-*.json
 feed_url.txt
 json_data/
+.drive_bridge_state.json
