@@ -295,6 +295,8 @@ def require_publish_auth(request):
     expected = get_publish_token()
     if not expected:
         raise HTTPException(status_code=503, detail="publish token is not configured")
+    if len(expected) < 32:
+        raise HTTPException(status_code=503, detail="publish token is too short")
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer ") or not secrets.compare_digest(auth[7:].strip(), expected):
         raise HTTPException(status_code=401, detail="unauthorized")
@@ -332,9 +334,13 @@ def normalize_payload(raw):
         raise ValueError("generated_at is too far in the future")
     if scheduled.astimezone(timezone.utc) > now + timedelta(minutes=30):
         raise ValueError("scheduled_at is too far in the future")
+    if generated < scheduled - timedelta(minutes=15):
+        raise ValueError("generated_at cannot be materially earlier than scheduled_at")
+    if cutoff > generated + timedelta(minutes=10):
+        raise ValueError("cutoff_at cannot be materially later than generated_at")
 
     local_slot = scheduled.astimezone(DUBLIN)
-    if local_slot.minute != 0 or local_slot.second != 0 or local_slot.hour not in {0, 6, 12, 18}:
+    if local_slot.minute != 0 or local_slot.second != 0 or local_slot.microsecond != 0 or local_slot.hour not in {0, 6, 12, 18}:
         raise ValueError("scheduled_at must be a Dublin 00:00/06:00/12:00/18:00 slot")
     slug = clean_text(raw.get("slug"), "slug", 32)
     expected_slug = local_slot.strftime("%Y-%m-%d-%H%M")
@@ -574,12 +580,13 @@ async def api_publish(request: Request):
             raise HTTPException(status_code=409, detail="slug already exists with different content")
 
         for item in payload["items"]:
-            prior_event = con.execute("SELECT n.id,e.slug FROM news_items n JOIN editions e ON e.id=n.edition_id WHERE n.event_key=? ORDER BY e.sort_ts DESC,n.id DESC LIMIT 1", (item["event_key"],)).fetchone()
+            prior_event = con.execute("SELECT n.id,e.slug,e.sort_ts FROM news_items n JOIN editions e ON e.id=n.edition_id WHERE n.event_key=? ORDER BY e.sort_ts DESC,n.id DESC LIMIT 1", (item["event_key"],)).fetchone()
+            prior_event_older = con.execute("SELECT n.id,e.slug,e.sort_ts FROM news_items n JOIN editions e ON e.id=n.edition_id WHERE n.event_key=? AND e.sort_ts<? ORDER BY e.sort_ts DESC,n.id DESC LIMIT 1", (item["event_key"], payload["sort_ts"])).fetchone()
             prior_url = con.execute("SELECT n.id,e.slug FROM news_items n JOIN editions e ON e.id=n.edition_id WHERE n.canonical_url=? ORDER BY e.sort_ts DESC,n.id DESC LIMIT 1", (item["canonical_url"],)).fetchone()
             if item["is_update"]:
-                if not prior_event:
+                if not prior_event_older:
                     con.rollback()
-                    raise HTTPException(status_code=409, detail=f"is_update requires an existing event_key: {item['event_key']}")
+                    raise HTTPException(status_code=409, detail=f"is_update requires the same event_key in an older edition: {item['event_key']}")
             elif prior_event or prior_url:
                 duplicate = item["event_key"] if prior_event else item["source_url"]
                 con.rollback()
