@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from json_store import JsonNewsStore, canonical_url
+from news_schedule import edition_status
 
 BASE=Path(__file__).resolve().parent
 DATA_ROOT=Path(os.environ.get("IRELAND_NEWS_JSON_DIR",BASE/"json_data"))
@@ -162,8 +163,10 @@ def edition_time(ed):
 def status_html(latest):
     dt=parse_dt(latest.get("published_at") or latest.get("generated_at"))
     if not dt: return ""
-    age=max(0,(datetime.now(DUBLIN)-dt).total_seconds()/3600); stale=age>STALE_HOURS
-    cls="statusbar stale" if stale else "statusbar"; state=f"⚠️ 已超过 {int(age)} 小时未更新" if stale else "更新正常"
+    status=edition_status(latest,stale_hours=STALE_HOURS)
+    age=status["age_hours"] or 0; stale=status["stale"]
+    cls="statusbar stale" if stale else "statusbar"
+    state=f"⚠️ {status['due_slug']} 期尚未发布" if status["missing_due_slot"] else (f"⚠️ 已超过 {int(age)} 小时未更新" if stale else "更新正常")
     return f'<div class="{cls}"><div><span class="status-dot"></span>最新发布：{esc(dt.strftime("%Y-%m-%d %H:%M"))} · {latest.get("item_count",0)} 条</div><div>{esc(state)}</div></div>'
 
 def layout(content,subtitle="住房 & IT 优先 · Greater Dublin",active="latest",extra_script=""):
@@ -229,9 +232,8 @@ async def publish_ui_post(request:Request):
 @app.get("/health")
 def health():
     latest=store.latest(); count=len(store.list_editions())
-    published=latest.get("published_at") if latest else None; dt=parse_dt(published)
-    age=max(0,(datetime.now(DUBLIN)-dt).total_seconds()/3600) if dt else None
-    return {"ok":True,"storage":"json","editions":count,"latest_slug":latest.get("slug") if latest else None,"latest_published_at":published,"stale":age is not None and age>STALE_HOURS,"age_hours":round(age,2) if age is not None else None}
+    published=latest.get("published_at") if latest else None
+    return {"ok":True,"storage":"json","editions":count,"latest_slug":latest.get("slug") if latest else None,"latest_published_at":published,**edition_status(latest,stale_hours=STALE_HOURS)}
 
 @app.get("/",response_class=HTMLResponse)
 def home(category:str|None=None):

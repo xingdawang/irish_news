@@ -140,3 +140,5 @@ uvicorn app:app --host 127.0.0.1 --port 8200
 ## 设计原则
 
 新闻生成端和网站完全解耦。网站不需要 LLM API Key，也不关心 JSON 是由 ChatGPT、其他模型、脚本还是人工生成；只要 JSON 符合 schema，网站就能解析、存档并保持现有展示功能。
+
+采集定时任务、SSH 直接发布、可选 GitHub 桥接及缺期排查见 [OPERATIONS.md](OPERATIONS.md)。轮询桥接文件本身不会生成新闻；`/health` 的 `ok` 仅表示服务可访问，内容新鲜度应检查 `stale` 和 `missing_due_slot`。

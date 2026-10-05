@@ -100,7 +100,9 @@ class JsonNewsStore:
                     "title":item.get("title"),
                     "source_name":item.get("source_name"),
                     "source_url":item.get("source_url"),
+                    "published_at":item.get("published_at"),
                     "is_update":bool(item.get("is_update",False)),
+                    "update_note":item.get("update_note"),
                     "slug":record.get("slug"),
                     "scheduled_at":record.get("scheduled_at"),
                 })

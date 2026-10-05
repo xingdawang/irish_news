@@ -21,14 +21,15 @@ def token():
 
 def main():
     parser = argparse.ArgumentParser(description="Publish one Ireland News edition through the authenticated API")
-    parser.add_argument("json_file")
+    parser.add_argument("json_file", help="edition JSON path, or - to read from stdin")
     parser.add_argument("--endpoint", default="http://127.0.0.1:8200/api/news/publish")
     args = parser.parse_args()
 
     auth = token()
     if not auth:
         raise SystemExit("publish token is not configured")
-    payload = Path(args.json_file).read_bytes()
+    payload = sys.stdin.buffer.read() if args.json_file == "-" else Path(args.json_file).read_bytes()
+    edition = json.loads(payload)
     req = Request(
         args.endpoint,
         data=payload,
@@ -40,7 +41,7 @@ def main():
             body = response.read().decode("utf-8")
             print(body)
             result = json.loads(body)
-            if not result.get("ok"):
+            if result.get("ok") is not True or result.get("status") not in {"created", "exists"} or result.get("slug") != edition.get("slug"):
                 raise SystemExit(1)
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
