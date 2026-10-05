@@ -7,7 +7,7 @@
 ## 生成端每次运行
 
 1. 用服务器 `./.venv/bin/python task_context.py` 读取当前期次和最近 60 天的 JSON 去重历史。
-2. 实时搜索并读取原文，优先 Greater Dublin 住房、规划、租赁，以及爱尔兰 IT、软件、AI 和招聘消息。通常取最近 24 小时，补发可扩展至 48 小时；不能把旧事实包装成新进展。
+2. 按 [EDITORIAL_POLICY.md](EDITORIAL_POLICY.md) 实时采集：每期目标12–18条、上限20条，先从至少8个可用来源收集40–60条候选。优先 Greater Dublin 住房及爱尔兰IT，同时覆盖交通、教育、医疗、就业、政策与民生。先取最近24小时，去重后不足12条再补查来源和主题、扩展至48小时；不能把旧事实包装成新进展。
 3. 写中文标题和 1–2 句中文摘要，保留准确的原文详情页链接和可验证的发布时间。没有发布时间证据则使用 `null`。只选可核实的实际消息，不填充数量。
 4. 按 `event_key`、规范化 URL 和事件语义去重。真实的新进展沿用原 `event_key`，填写 `is_update=true` 和 `update_note`。遇到 409 应检查去重历史，不能通过随意换 key 或伪造 update 绕过。
 5. 保存符合 README schema 的 UTF-8 JSON，再直接发送至服务器。发布 Token 只在服务器读取，不必同步新闻内容到 Google Drive 或另一个 GitHub 仓库。
