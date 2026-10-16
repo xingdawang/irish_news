@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from urllib.parse import urlparse
 from pathlib import Path
 import html
@@ -17,6 +17,7 @@ BASE=Path(__file__).resolve().parent
 DATA_ROOT=Path(os.environ.get("IRELAND_NEWS_JSON_DIR",BASE/"json_data"))
 TOKEN_FILE=Path(os.environ.get("IRELAND_NEWS_TOKEN_FILE",BASE/".publish_token"))
 BROWSER_TOKEN_FILE=Path(os.environ.get("IRELAND_NEWS_BROWSER_TOKEN_FILE",BASE/".browser_publish_token"))
+BROWSER_COOKIE="ireland_news_browser_publish"
 DUBLIN=ZoneInfo("Europe/Dublin")
 STALE_HOURS=int(os.environ.get("IRELAND_NEWS_STALE_HOURS","8"))
 MAX_BODY_BYTES=int(os.environ.get("IRELAND_NEWS_MAX_BODY_BYTES","1048576"))
@@ -198,11 +199,61 @@ def get_browser_publish_token():
     try: return BROWSER_TOKEN_FILE.read_text(encoding="utf-8").strip()
     except OSError: return ""
 
+
+def browser_cookie_valid(request):
+    expected=get_browser_publish_token()
+    supplied=request.cookies.get(BROWSER_COOKIE,"")
+    return bool(expected and len(expected)>=32 and supplied and secrets.compare_digest(supplied,expected))
+
+def browser_login_page(message=""):
+    msg=f'<div style="margin:0 0 16px;color:#b42318">{esc(message)}</div>' if message else ""
+    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ireland News Publisher Login</title>
+<style>
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f8;color:#13202f}}
+.box{{max-width:520px;margin:60px auto;background:#fff;padding:24px;border-radius:18px;border:1px solid #e7eaf0}}
+input{{width:100%;box-sizing:border-box;padding:12px;border:1px solid #d0d5dd;border-radius:10px}}
+button{{margin-top:16px;padding:11px 18px;border:0;border-radius:10px;background:#0b6bcb;color:white;font-weight:700}}
+</style></head><body><main class="box"><h1>🔐 发布浏览器登录</h1>
+<p>此操作只需完成一次。成功后浏览器使用安全 Cookie 保持授权。</p>{msg}
+<form method="post" action="/publish-login">
+<input name="token" type="password" autocomplete="off" required>
+<button type="submit">登录发布器</button>
+</form></main></body></html>"""
+
+@app.get("/publish-login",response_class=HTMLResponse)
+def publish_login_get(request:Request):
+    if browser_cookie_valid(request):
+        return RedirectResponse("/publish-ui",status_code=303)
+    return browser_login_page()
+
+@app.post("/publish-login")
+async def publish_login_post(request:Request):
+    expected=get_browser_publish_token()
+    if not expected or len(expected)<32:
+        raise HTTPException(status_code=503,detail="browser publish token is not configured")
+    form=await request.form()
+    supplied=str(form.get("token") or "")
+    if not secrets.compare_digest(supplied,expected):
+        return HTMLResponse(browser_login_page("发布口令错误"),status_code=401)
+    response=RedirectResponse("/publish-ui",status_code=303)
+    response.set_cookie(
+        BROWSER_COOKIE,
+        supplied,
+        max_age=90*24*60*60,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
 def browser_publish_page(message="",ok=False):
     tone="#067647" if ok else "#b42318"
     msg=f'<div style="margin:0 0 16px;padding:12px 14px;border-radius:10px;background:#f8fafc;color:{tone};font-size:14px">{esc(message)}</div>' if message else ""
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ireland News JSON Publish</title>
-<style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f8;color:#13202f;margin:0}}.box{{max-width:820px;margin:40px auto;background:#fff;padding:24px;border-radius:18px;border:1px solid #e7eaf0}}h1{{margin-top:0}}label{{font-weight:700;display:block;margin:14px 0 6px}}input,textarea{{width:100%;box-sizing:border-box;border:1px solid #d0d5dd;border-radius:10px;padding:11px;font:inherit}}textarea{{min-height:420px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}}button{{margin-top:16px;background:#0b6bcb;color:#fff;border:0;border-radius:10px;padding:11px 18px;font-weight:700;cursor:pointer}}.hint{{color:#667085;font-size:13px;line-height:1.5}}</style></head><body><main class="box"><h1>🇮🇪 JSON 发布</h1><p class="hint">只接受标准 Ireland News JSON。发布成功后会进入与网站相同的去重、校验和历史存档流程。</p>{msg}<form method="post" action="/publish-ui"><label>发布口令</label><input name="token" type="password" autocomplete="off" required><label>JSON</label><textarea name="payload" spellcheck="false" required></textarea><button type="submit">发布到网站</button></form></main></body></html>'''
+<style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f8;color:#13202f;margin:0}}.box{{max-width:820px;margin:40px auto;background:#fff;padding:24px;border-radius:18px;border:1px solid #e7eaf0}}h1{{margin-top:0}}label{{font-weight:700;display:block;margin:14px 0 6px}}input,textarea{{width:100%;box-sizing:border-box;border:1px solid #d0d5dd;border-radius:10px;padding:11px;font:inherit}}textarea{{min-height:420px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}}button{{margin-top:16px;background:#0b6bcb;color:#fff;border:0;border-radius:10px;padding:11px 18px;font-weight:700;cursor:pointer}}.hint{{color:#667085;font-size:13px;line-height:1.5}}</style></head><body><main class="box"><h1>🇮🇪 JSON 发布</h1><p class="hint">只接受标准 Ireland News JSON。发布成功后会进入与网站相同的去重、校验和历史存档流程。</p>{msg}<form method="post" action="/publish-ui"><label>发布口令（已登录的浏览器可留空）</label><input name="token" type="password" autocomplete="off"><label>JSON</label><textarea name="payload" spellcheck="false" required></textarea><button type="submit">发布到网站</button></form></main></body></html>'''
 
 @app.get("/publish-ui",response_class=HTMLResponse)
 def publish_ui_get():
@@ -215,6 +266,8 @@ async def publish_ui_post(request:Request):
         raise HTTPException(status_code=503,detail="browser publish token is not configured")
     form=await request.form()
     supplied=str(form.get("token") or "")
+    if not supplied and browser_cookie_valid(request):
+        supplied=request.cookies.get(BROWSER_COOKIE,"")
     if not secrets.compare_digest(supplied,expected):
         raise HTTPException(status_code=401,detail="invalid publish token")
     raw=str(form.get("payload") or "")
