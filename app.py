@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from urllib.parse import urlparse
 from pathlib import Path
 import html
@@ -11,11 +11,13 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from json_store import JsonNewsStore, canonical_url
+from news_schedule import edition_status
 
 BASE=Path(__file__).resolve().parent
 DATA_ROOT=Path(os.environ.get("IRELAND_NEWS_JSON_DIR",BASE/"json_data"))
 TOKEN_FILE=Path(os.environ.get("IRELAND_NEWS_TOKEN_FILE",BASE/".publish_token"))
 BROWSER_TOKEN_FILE=Path(os.environ.get("IRELAND_NEWS_BROWSER_TOKEN_FILE",BASE/".browser_publish_token"))
+BROWSER_COOKIE="ireland_news_browser_publish"
 DUBLIN=ZoneInfo("Europe/Dublin")
 STALE_HOURS=int(os.environ.get("IRELAND_NEWS_STALE_HOURS","8"))
 MAX_BODY_BYTES=int(os.environ.get("IRELAND_NEWS_MAX_BODY_BYTES","1048576"))
@@ -24,6 +26,20 @@ store=JsonNewsStore(DATA_ROOT)
 app=FastAPI(title="Ireland News",docs_url=None,redoc_url=None)
 
 def esc(v): return html.escape(str(v or ""))
+
+def display_text(value):
+    # Stored content is plain text, but older editions can contain HTML entities.
+    text=str(value or "")
+    for _ in range(3):
+        decoded=html.unescape(text)
+        if decoded==text: break
+        text=decoded
+    return text
+
+def text_html(value): return esc(display_text(value))
+
+def edition_title(ed):
+    return re.sub(r"住房\s*&\s*IT", "住房 IT", display_text(ed.get("title")))
 
 def parse_dt(value):
     if not value: return None
@@ -133,16 +149,69 @@ a{color:inherit}.wrap{max-width:1100px;margin:auto;padding:16px}.top{position:st
 .hero{background:linear-gradient(135deg,#0b6bcb,#0f8a5f);color:#fff;border-radius:22px;padding:22px;margin:8px 0 16px}.hero h1{margin:0 0 8px;font-size:28px}.hero p{margin:0;opacity:.9;line-height:1.55}
 .statusbar{display:flex;justify-content:space-between;gap:10px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:11px 13px;margin:0 0 14px;font-size:13px;color:#475467}.statusbar.stale{background:var(--warnbg);border-color:#fed7aa;color:var(--warn)}.status-dot{width:8px;height:8px;border-radius:50%;background:#12b76a;display:inline-block;margin-right:7px}.stale .status-dot{background:#f79009}
 .filters{display:flex;gap:8px;overflow:auto;padding:2px 0 14px}.pill{white-space:nowrap;text-decoration:none;color:var(--text);background:#fff;border:1px solid var(--line);padding:9px 13px;border-radius:999px;font-size:14px}.pill.active{background:#13202f;color:#fff;border-color:#13202f}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;display:flex;flex-direction:column;min-height:220px;box-shadow:0 5px 18px rgba(16,24,40,.04)}
-.meta{font-size:12px;color:var(--muted);display:flex;gap:7px;flex-wrap:wrap}.tag{font-weight:700;color:var(--accent)}.update{color:#b54708;font-weight:700}.card h2{font-size:18px;line-height:1.4;margin:10px 0}.card p{font-size:14px;line-height:1.65;color:#344054;margin:0 0 14px}.source{margin-top:auto;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.card{min-width:0;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;display:flex;flex-direction:column;min-height:220px;box-shadow:0 5px 18px rgba(16,24,40,.04)}
+.meta{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;flex-wrap:nowrap;white-space:nowrap;min-width:0}.meta .tag,.meta .update,.meta time{flex-shrink:0}.meta .region{min-width:0;overflow:hidden;text-overflow:ellipsis}.meta time{margin-left:auto;font-variant-numeric:tabular-nums}.tag{font-weight:700;color:var(--accent)}.update{color:#b54708;font-weight:700}.card h2{font-size:18px;line-height:1.4;margin:10px 0}.card p{font-size:14px;line-height:1.65;color:#344054;margin:0 0 14px}.source{margin-top:auto;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted)}
 .source a{color:var(--accent);text-decoration:none;font-weight:700}.empty{padding:40px;background:#fff;border-radius:18px;text-align:center;color:var(--muted)}
 .footer{text-align:center;color:var(--muted);font-size:12px;padding:28px 0}.edition{margin:0 0 14px;color:var(--muted);font-size:13px}
 .home-actions{display:flex;gap:10px;margin:16px 0}.action{flex:1;background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px;text-decoration:none;text-align:center;font-size:14px;font-weight:700;color:#344054}.action.disabled{font-weight:500;color:#98a2b3}
-.archive-toolbar{display:flex;gap:8px;overflow:auto;margin-bottom:8px}.archive-day{margin:22px 0 10px;font-size:20px}.archive-list{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.archive-item{display:flex;justify-content:space-between;align-items:center;gap:14px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:15px;text-decoration:none;position:relative}.archive-item:active{transform:scale(.995)}.archive-title{font-weight:750;line-height:1.4}.archive-meta{font-size:12px;color:var(--muted);margin-top:5px}.archive-right{display:flex;align-items:center;gap:9px}.archive-arrow{font-size:18px;color:var(--accent)}.unread-dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px #e9f2ff;display:inline-block}.unread-text{color:var(--accent);font-weight:700}
-.pager{display:grid;grid-template-columns:1fr auto 1fr;gap:8px;align-items:center;margin:0 0 14px}.pager a,.pager span{background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;text-decoration:none;font-size:13px}.pager .right{text-align:right}.pager .center{text-align:center;color:var(--muted)}
-@media(max-width:820px){.grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:600px){.wrap{padding:12px}.grid{grid-template-columns:1fr}.archive-list{grid-template-columns:1fr}.hero{border-radius:18px;padding:18px}.hero h1{font-size:23px}.card{min-height:0}.brand{font-size:18px}.stamp{display:none}.topin{padding-bottom:8px}.mainnav{padding-bottom:9px}.pager{grid-template-columns:1fr 1fr}.pager .center{grid-column:1/-1;grid-row:1}.pager .left{grid-column:1}.pager .right{grid-column:2}.statusbar{align-items:flex-start;flex-direction:column}.home-actions{flex-direction:column}}
+.archive-toolbar{display:flex;gap:8px;overflow:auto;margin-bottom:8px}.archive-day{margin:22px 0 10px;font-size:20px}.archive-list{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.archive-item{display:flex;justify-content:space-between;align-items:center;gap:14px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:15px;text-decoration:none;position:relative}.archive-item:active{transform:scale(.995)}.archive-title{font-weight:750;line-height:1.4}.archive-meta{font-size:12px;color:var(--muted);margin-top:5px}.archive-right{display:flex;align-items:center;gap:9px}.archive-arrow{font-size:18px;color:var(--accent)}.unread-dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px #e9f2ff;display:inline-block}.unread-dot[hidden]{display:none}.unread-text{color:var(--accent);font-weight:700}
+.pager{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);gap:12px;align-items:stretch;margin:0 0 14px}.pager-link{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;text-decoration:none;font-size:14px;display:flex;flex-direction:column;justify-content:center;gap:4px}.pager-label{font-weight:700}.pager-link time{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}.pager .right{text-align:right}.pager .center{text-align:center;color:var(--muted)}.pager .disabled{color:#98a2b3}.pager a:hover{border-color:var(--accent)}.pager-bottom{margin:20px 0 0}
+.reading-status{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:11px 13px;margin:0 0 14px;font-size:13px}.read-badge{font-weight:700;color:var(--accent)}.read-badge.is-read{color:var(--green)}.read-hint{color:var(--muted);flex:1}.read-toggle{border:1px solid var(--line);background:#fff;color:var(--accent);border-radius:8px;padding:8px 11px;font:inherit;cursor:pointer}.read-toggle:disabled{color:var(--muted);cursor:default}.reading-end{margin:20px 0 0}.reading-end p{color:var(--muted);text-align:center;font-size:13px}.reading-end .reading-status{margin-bottom:0}.pager a:focus-visible,.read-toggle:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+@media(max-width:820px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.wrap{padding:12px}.grid{grid-template-columns:1fr}.archive-list{grid-template-columns:1fr}.hero{border-radius:18px;padding:18px}.hero h1{font-size:23px}.card{min-height:0}.brand{font-size:18px}.stamp{display:none}.topin{padding-bottom:8px}.mainnav{padding-bottom:9px}.pager{grid-template-columns:1fr 1fr}.pager .center{grid-column:1/-1;grid-row:1}.pager .left{grid-column:1}.pager .right{grid-column:2}.statusbar{align-items:flex-start;flex-direction:column}.home-actions{flex-direction:column}.reading-status{gap:8px}.read-hint{flex-basis:calc(100% - 60px)}}
 """
-READ_JS="""<script>(function(){const KEY='irelandNewsReadEditionsV1';function getRead(){try{return new Set(JSON.parse(localStorage.getItem(KEY)||'[]'))}catch(e){return new Set()}}function save(s){try{localStorage.setItem(KEY,JSON.stringify(Array.from(s).slice(-500)))}catch(e){}}window.IrelandNewsRead={mark:function(slug){if(!slug)return;const s=getRead();s.add(slug);save(s)},refreshArchive:function(){const s=getRead();document.querySelectorAll('.archive-item[data-slug]').forEach(el=>{const read=s.has(el.dataset.slug),dot=el.querySelector('.unread-dot'),txt=el.querySelector('.unread-label');if(dot)dot.style.display=read?'none':'inline-block';if(txt){txt.textContent=read?'已读':'未读';txt.classList.toggle('unread-text',!read)}})}};document.addEventListener('DOMContentLoaded',()=>window.IrelandNewsRead.refreshArchive());})();</script>"""
+READ_JS="""<script>(function(){
+const KEY='irelandNewsReadEditionsV1';
+let available=true, observer;
+function getRead(){
+    try{
+        const values=JSON.parse(localStorage.getItem(KEY)||'[]');
+        return new Set(Array.isArray(values)?values.filter(v=>typeof v==='string'):[]);
+    }catch(e){available=false;return new Set()}
+}
+function refresh(){
+    const read=getRead();
+    document.querySelectorAll('.archive-item[data-slug]').forEach(el=>{
+        const seen=read.has(el.dataset.slug), dot=el.querySelector('.unread-dot'), label=el.querySelector('.unread-label');
+        if(dot)dot.hidden=seen||!available;
+        if(label){label.textContent=available?(seen?'已读':'未读'):'阅读状态不可用';label.classList.toggle('unread-text',available&&!seen)}
+    });
+    document.querySelectorAll('[data-reading-slug]').forEach(el=>{
+        const seen=read.has(el.dataset.readingSlug), badge=el.querySelector('.read-badge'), button=el.querySelector('.read-toggle');
+        badge.textContent=available?(seen?'✓ 已读':'● 未读'):'阅读状态不可用';
+        badge.classList.toggle('is-read',available&&seen);
+        el.querySelector('.read-hint').textContent=available?(seen?'已记录本期阅读状态':(el.dataset.autoRead==='true'?'读到文末自动标为已读':'可手动标记本期阅读状态')):'请允许浏览器保存阅读标记';
+        button.disabled=!available;
+        button.textContent=seen?'标为未读':'标为已读';
+    });
+}
+function setRead(slug,seen){
+    const read=getRead();
+    if(!available)return;
+    if(seen){read.delete(slug);read.add(slug)}else read.delete(slug);
+    try{localStorage.setItem(KEY,JSON.stringify(Array.from(read).slice(-1000)))}catch(e){available=false}
+    refresh();
+}
+document.addEventListener('DOMContentLoaded',()=>{
+    refresh();
+    document.querySelectorAll('.read-toggle').forEach(button=>button.addEventListener('click',()=>{
+        if(observer)observer.disconnect();
+        const slug=button.closest('[data-reading-slug]').dataset.readingSlug;
+        setRead(slug,!getRead().has(slug));
+    }));
+    const end=document.querySelector('[data-reading-end]');
+    if(end&&'IntersectionObserver' in window){
+        observer=new IntersectionObserver(entries=>{
+            if(document.visibilityState==='visible'&&entries.some(entry=>entry.isIntersecting)){
+                setRead(end.dataset.readingEnd,true);
+                observer.disconnect();
+            }
+        },{threshold:1});
+        observer.observe(end);
+    }
+});
+window.addEventListener('pageshow',refresh);
+window.addEventListener('storage',event=>{if(event.key===KEY||event.key===null)refresh()});
+})();</script>"""
 
 @app.middleware("http")
 async def no_cache(request,call_next):
@@ -162,14 +231,16 @@ def edition_time(ed):
 def status_html(latest):
     dt=parse_dt(latest.get("published_at") or latest.get("generated_at"))
     if not dt: return ""
-    age=max(0,(datetime.now(DUBLIN)-dt).total_seconds()/3600); stale=age>STALE_HOURS
-    cls="statusbar stale" if stale else "statusbar"; state=f"⚠️ 已超过 {int(age)} 小时未更新" if stale else "更新正常"
+    status=edition_status(latest,stale_hours=STALE_HOURS)
+    age=status["age_hours"] or 0; stale=status["stale"]
+    cls="statusbar stale" if stale else "statusbar"
+    state=f"⚠️ {status['due_slug']} 期尚未发布" if status["missing_due_slot"] else (f"⚠️ 已超过 {int(age)} 小时未更新" if stale else "更新正常")
     return f'<div class="{cls}"><div><span class="status-dot"></span>最新发布：{esc(dt.strftime("%Y-%m-%d %H:%M"))} · {latest.get("item_count",0)} 条</div><div>{esc(state)}</div></div>'
 
-def layout(content,subtitle="住房 & IT 优先 · Greater Dublin",active="latest",extra_script=""):
+def layout(content,subtitle="住房 IT 优先 · Greater Dublin",active="latest"):
     now=datetime.now(DUBLIN).strftime("%Y-%m-%d %H:%M")
     lc=" active" if active=="latest" else ""; ac=" active" if active=="archive" else ""
-    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0b6bcb"><title>Ireland News</title><style>{CSS}</style></head><body><div class="top"><div class="topin"><a class="brand" href="/">🇮🇪 Ireland News</a><div class="stamp">Dublin · {esc(now)}</div></div><div class="mainnav"><a class="navlink{lc}" href="/">最新一期</a><a class="navlink{ac}" href="/archive">历史简报</a></div></div><main class="wrap"><section class="hero"><h1>爱尔兰新闻简报</h1><p>{esc(subtitle)}<br>住房、规划、IT、AI、就业与都柏林本地重要动态。</p></section>{content}<div class="footer">AI 整理摘要仅供快速阅读 · 重要信息请以原文为准</div></main>{READ_JS}{extra_script}</body></html>'''
+    return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#0b6bcb"><title>Ireland News</title><style>{CSS}</style></head><body><div class="top"><div class="topin"><a class="brand" href="/">🇮🇪 Ireland News</a><div class="stamp">Dublin · {esc(now)}</div></div><div class="mainnav"><a class="navlink{lc}" href="/">最新一期</a><a class="navlink{ac}" href="/archive">历史简报</a></div></div><main class="wrap"><section class="hero"><h1>爱尔兰新闻简报</h1><p>{text_html(subtitle)}<br>住房、规划、IT、AI、就业与都柏林本地重要动态。</p></section>{content}<div class="footer">AI 整理摘要仅供快速阅读 · 重要信息请以原文为准</div></main>{READ_JS}</body></html>'''
 
 def cards(rows):
     if not rows: return '<div class="empty">这一期暂时没有新闻。</div>'
@@ -178,8 +249,28 @@ def cards(rows):
         u=r.get("source_url") or ""; host=urlparse(u).netloc.replace("www.","") if u else ""
         link=f'<a href="{esc(u)}" target="_blank" rel="noopener">查看原文 ↗</a>' if u else ""
         update='<span class="update">新进展</span>' if r.get("is_update") else ""
-        out.append(f'<article class="card"><div class="meta"><span class="tag">{label(r.get("category"))}</span>{update}<span>{esc(r.get("region"))}</span><span>{esc(r.get("published_at"))}</span></div><h2>{esc(r.get("title"))}</h2><p>{esc(r.get("summary"))}</p><div class="source"><span>{esc(r.get("source_name") or host)}</span>{link}</div></article>')
+        published=parse_dt(r.get("published_at"))
+        stamp=f'<time datetime="{esc(published.isoformat())}" title="{published.strftime("%Y-%m-%d %H:%M")}（都柏林时间）">{published.strftime("%m-%d %H:%M")}</time>' if published else ""
+        out.append(f'<article class="card"><div class="meta"><span class="tag">{label(r.get("category"))}</span>{update}<span class="region" title="{text_html(r.get("region"))}">{text_html(r.get("region"))}</span>{stamp}</div><h2>{text_html(r.get("title"))}</h2><p>{text_html(r.get("summary"))}</p><div class="source"><span>{text_html(r.get("source_name") or host)}</span>{link}</div></article>')
     out.append("</div>"); return "".join(out)
+
+def edition_pager(older,newer,position):
+    def neighbor(ed,direction):
+        is_older=direction=="left"
+        label="← 更早一期" if is_older else "更新一期 →"
+        if not ed:
+            text="已是最早一期" if is_older else "已是最新一期"
+            return f'<span class="pager-link {direction} disabled" aria-disabled="true">{text}</span>'
+        date=f'{edition_date(ed)} {edition_time(ed)}'
+        return f'<a class="pager-link {direction}" href="/edition/{esc(ed.get("slug"))}" aria-label="{label}：{esc(date)}"><span class="pager-label">{label}</span><time datetime="{esc(ed.get("scheduled_at"))}">{esc(date)}</time></a>'
+    return f'<nav class="pager pager-{position}" aria-label="期刊导航（{"顶部" if position=="top" else "底部"}）">{neighbor(older,"left")}<a class="pager-link center" href="/archive">全部历史</a>{neighbor(newer,"right")}</nav>'
+
+def reading_status(slug,auto=True):
+    hint="读到文末自动标为已读" if auto else "可手动标记本期阅读状态"
+    return f'<div class="reading-status" data-reading-slug="{esc(slug)}" data-auto-read="{str(auto).lower()}"><span class="read-badge" role="status">阅读状态…</span><span class="read-hint">{hint}</span><button type="button" class="read-toggle" disabled>标为已读</button><noscript>启用 JavaScript 后可保存阅读标记。</noscript></div>'
+
+def reading_end(slug):
+    return f'<div class="reading-end"><p data-reading-end="{esc(slug)}">— 本期新闻到此结束 —</p>{reading_status(slug)}</div>'
 
 def archive_keep(ed,window):
     if window=="all": return True
@@ -195,11 +286,61 @@ def get_browser_publish_token():
     try: return BROWSER_TOKEN_FILE.read_text(encoding="utf-8").strip()
     except OSError: return ""
 
+
+def browser_cookie_valid(request):
+    expected=get_browser_publish_token()
+    supplied=request.cookies.get(BROWSER_COOKIE,"")
+    return bool(expected and len(expected)>=32 and supplied and secrets.compare_digest(supplied,expected))
+
+def browser_login_page(message=""):
+    msg=f'<div style="margin:0 0 16px;color:#b42318">{esc(message)}</div>' if message else ""
+    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ireland News Publisher Login</title>
+<style>
+body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f8;color:#13202f}}
+.box{{max-width:520px;margin:60px auto;background:#fff;padding:24px;border-radius:18px;border:1px solid #e7eaf0}}
+input{{width:100%;box-sizing:border-box;padding:12px;border:1px solid #d0d5dd;border-radius:10px}}
+button{{margin-top:16px;padding:11px 18px;border:0;border-radius:10px;background:#0b6bcb;color:white;font-weight:700}}
+</style></head><body><main class="box"><h1>🔐 发布浏览器登录</h1>
+<p>此操作只需完成一次。成功后浏览器使用安全 Cookie 保持授权。</p>{msg}
+<form method="post" action="/publish-login">
+<input name="token" type="password" autocomplete="off" required>
+<button type="submit">登录发布器</button>
+</form></main></body></html>"""
+
+@app.get("/publish-login",response_class=HTMLResponse)
+def publish_login_get(request:Request):
+    if browser_cookie_valid(request):
+        return RedirectResponse("/publish-ui",status_code=303)
+    return browser_login_page()
+
+@app.post("/publish-login")
+async def publish_login_post(request:Request):
+    expected=get_browser_publish_token()
+    if not expected or len(expected)<32:
+        raise HTTPException(status_code=503,detail="browser publish token is not configured")
+    form=await request.form()
+    supplied=str(form.get("token") or "")
+    if not secrets.compare_digest(supplied,expected):
+        return HTMLResponse(browser_login_page("发布口令错误"),status_code=401)
+    response=RedirectResponse("/publish-ui",status_code=303)
+    response.set_cookie(
+        BROWSER_COOKIE,
+        supplied,
+        max_age=90*24*60*60,
+        httponly=True,
+        secure=True,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
 def browser_publish_page(message="",ok=False):
     tone="#067647" if ok else "#b42318"
     msg=f'<div style="margin:0 0 16px;padding:12px 14px;border-radius:10px;background:#f8fafc;color:{tone};font-size:14px">{esc(message)}</div>' if message else ""
     return f'''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ireland News JSON Publish</title>
-<style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f8;color:#13202f;margin:0}}.box{{max-width:820px;margin:40px auto;background:#fff;padding:24px;border-radius:18px;border:1px solid #e7eaf0}}h1{{margin-top:0}}label{{font-weight:700;display:block;margin:14px 0 6px}}input,textarea{{width:100%;box-sizing:border-box;border:1px solid #d0d5dd;border-radius:10px;padding:11px;font:inherit}}textarea{{min-height:420px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}}button{{margin-top:16px;background:#0b6bcb;color:#fff;border:0;border-radius:10px;padding:11px 18px;font-weight:700;cursor:pointer}}.hint{{color:#667085;font-size:13px;line-height:1.5}}</style></head><body><main class="box"><h1>🇮🇪 JSON 发布</h1><p class="hint">只接受标准 Ireland News JSON。发布成功后会进入与网站相同的去重、校验和历史存档流程。</p>{msg}<form method="post" action="/publish-ui"><label>发布口令</label><input name="token" type="password" autocomplete="off" required><label>JSON</label><textarea name="payload" spellcheck="false" required></textarea><button type="submit">发布到网站</button></form></main></body></html>'''
+<style>body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f8;color:#13202f;margin:0}}.box{{max-width:820px;margin:40px auto;background:#fff;padding:24px;border-radius:18px;border:1px solid #e7eaf0}}h1{{margin-top:0}}label{{font-weight:700;display:block;margin:14px 0 6px}}input,textarea{{width:100%;box-sizing:border-box;border:1px solid #d0d5dd;border-radius:10px;padding:11px;font:inherit}}textarea{{min-height:420px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}}button{{margin-top:16px;background:#0b6bcb;color:#fff;border:0;border-radius:10px;padding:11px 18px;font-weight:700;cursor:pointer}}.hint{{color:#667085;font-size:13px;line-height:1.5}}</style></head><body><main class="box"><h1>🇮🇪 JSON 发布</h1><p class="hint">只接受标准 Ireland News JSON。发布成功后会进入与网站相同的去重、校验和历史存档流程。</p>{msg}<form method="post" action="/publish-ui"><label>发布口令（已登录的浏览器可留空）</label><input name="token" type="password" autocomplete="off"><label>JSON</label><textarea name="payload" spellcheck="false" required></textarea><button type="submit">发布到网站</button></form></main></body></html>'''
 
 @app.get("/publish-ui",response_class=HTMLResponse)
 def publish_ui_get():
@@ -212,6 +353,8 @@ async def publish_ui_post(request:Request):
         raise HTTPException(status_code=503,detail="browser publish token is not configured")
     form=await request.form()
     supplied=str(form.get("token") or "")
+    if not supplied and browser_cookie_valid(request):
+        supplied=request.cookies.get(BROWSER_COOKIE,"")
     if not secrets.compare_digest(supplied,expected):
         raise HTTPException(status_code=401,detail="invalid publish token")
     raw=str(form.get("payload") or "")
@@ -229,9 +372,8 @@ async def publish_ui_post(request:Request):
 @app.get("/health")
 def health():
     latest=store.latest(); count=len(store.list_editions())
-    published=latest.get("published_at") if latest else None; dt=parse_dt(published)
-    age=max(0,(datetime.now(DUBLIN)-dt).total_seconds()/3600) if dt else None
-    return {"ok":True,"storage":"json","editions":count,"latest_slug":latest.get("slug") if latest else None,"latest_published_at":published,"stale":age is not None and age>STALE_HOURS,"age_hours":round(age,2) if age is not None else None}
+    published=latest.get("published_at") if latest else None
+    return {"ok":True,"storage":"json","editions":count,"latest_slug":latest.get("slug") if latest else None,"latest_published_at":published,**edition_status(latest,stale_hours=STALE_HOURS)}
 
 @app.get("/",response_class=HTMLResponse)
 def home(category:str|None=None):
@@ -242,11 +384,11 @@ def home(category:str|None=None):
     if category in {"housing","tech","other"}: rows=[x for x in rows if x.get("category")==category]
     active=category or "all"
     nav='<div class="filters">'+''.join([f'<a class="pill {"active" if active==k else ""}" href="/'+(f'?category={k}' if k!="all" else '')+f'">{v}</a>' for k,v in [("all","全部"),("housing","🏠 住房"),("tech","💻 IT / AI"),("other","📍 其他")]])+'</div>'
-    info=f'<div class="edition">最新一期：{esc(latest.get("title"))} · {esc(edition_date(latest))} {esc(edition_time(latest))} · {latest.get("item_count",0)} 条</div>'
-    prev=f'<a class="action" href="/edition/{esc(previous.get("slug"))}">← 上一期</a>' if previous else '<span class="action disabled">← 暂无上一期</span>'
-    actions=f'<div class="home-actions">{prev}<a class="action" href="/archive">查看全部历史</a></div>'
-    mark=f'<script>document.addEventListener("DOMContentLoaded",()=>window.IrelandNewsRead.mark({latest.get("slug")!r}));</script>'
-    return layout(status_html(latest)+nav+info+cards(rows)+actions,active="latest",extra_script=mark)
+    info=f'<div class="edition">最新一期：{esc(edition_title(latest))} · {latest.get("item_count",0)} 条</div>'
+    # Reading a single category does not mean the entire edition has been read.
+    filtered=category in {"housing","tech","other"}
+    ending=reading_status(latest.get("slug"),auto=False) if filtered else reading_end(latest.get("slug"))
+    return layout(status_html(latest)+edition_pager(previous,None,"top")+nav+info+reading_status(latest.get("slug"),auto=not filtered)+cards(rows)+ending+edition_pager(previous,None,"bottom"),active="latest")
 
 @app.get("/archive",response_class=HTMLResponse)
 def archive(window:str="all"):
@@ -261,7 +403,7 @@ def archive(window:str="all"):
         if day!=current_day:
             if current_day is not None: out.append("</div>")
             out.append(f'<h2 class="archive-day">{esc(day)}</h2><div class="archive-list">'); current_day=day
-        out.append(f'<a class="archive-item" data-slug="{esc(ed.get("slug"))}" href="/edition/{esc(ed.get("slug"))}"><div><div class="archive-title">{esc(edition_time(ed) or "本期")} · {esc(ed.get("title"))}</div><div class="archive-meta">{ed.get("item_count",0)} 条新闻 · <span class="unread-label unread-text">未读</span></div></div><div class="archive-right"><span class="unread-dot"></span><span class="archive-arrow">›</span></div></a>')
+        out.append(f'<a class="archive-item" data-slug="{esc(ed.get("slug"))}" href="/edition/{esc(ed.get("slug"))}"><div><div class="archive-title">{esc(edition_time(ed) or "本期")} · {esc(edition_title(ed))}</div><div class="archive-meta">{ed.get("item_count",0)} 条新闻 · <span class="unread-label unread-text">未读</span></div></div><div class="archive-right"><span class="unread-dot"></span><span class="archive-arrow">›</span></div></a>')
     out.append("</div>")
     return layout("".join(out),"按日期回看每一期新闻 · 未读会显示蓝点",active="archive")
 
@@ -272,12 +414,8 @@ def edition(slug:str):
     metas=store.list_editions(); pos=next((i for i,x in enumerate(metas) if x.get("slug")==slug),None)
     newer=metas[pos-1] if pos is not None and pos>0 else None
     older=metas[pos+1] if pos is not None and pos+1<len(metas) else None
-    left=f'<a class="left" href="/edition/{esc(older.get("slug"))}">← 上一期</a>' if older else '<span class="left">← 已是最早</span>'
-    right=f'<a class="right" href="/edition/{esc(newer.get("slug"))}">下一期 →</a>' if newer else '<span class="right">已是最新 →</span>'
-    pager=f'<div class="pager">{left}<a class="center" href="/archive">历史简报</a>{right}</div>'
-    info=f'<div class="edition">{esc(ed.get("title"))} · {esc(edition_date(ed))} {esc(edition_time(ed))} · {ed.get("item_count",0)} 条</div>'
-    mark=f'<script>document.addEventListener("DOMContentLoaded",()=>window.IrelandNewsRead.mark({slug!r}));</script>'
-    return layout(pager+info+cards(ed.get("items",[])),esc(ed.get("title")),active="archive",extra_script=mark)
+    info=f'<div class="edition">本期：{esc(edition_date(ed))} {esc(edition_time(ed))} · {ed.get("item_count",0)} 条</div>'
+    return layout(edition_pager(older,newer,"top")+info+reading_status(slug)+cards(ed.get("items",[]))+reading_end(slug)+edition_pager(older,newer,"bottom"),edition_title(ed),active="archive")
 
 @app.get("/api/latest")
 def api_latest():

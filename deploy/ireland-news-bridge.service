@@ -1,0 +1,13 @@
+[Unit]
+Description=Import Ireland News editions from the optional GitHub bridge
+After=network-online.target ireland-news.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/ireland-news
+ExecStart=/home/ubuntu/ireland-news/.venv/bin/python github_bridge_poller.py
+TimeoutStartSec=120
+UMask=0077

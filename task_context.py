@@ -1,35 +1,25 @@
 #!/usr/bin/env python3
 import json
-import sqlite3
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from json_store import JsonNewsStore
+from news_schedule import due_slot
+
 BASE = Path(__file__).resolve().parent
-DB = BASE / "news.db"
 
 def main():
     cutoff = int((datetime.now(timezone.utc) - timedelta(days=60)).timestamp())
-    con = sqlite3.connect(DB)
-    con.row_factory = sqlite3.Row
-    con.execute("PRAGMA query_only=ON")
-    rows = con.execute("""
-        SELECT n.event_key,n.title,n.source_name,n.source_url,n.published_at,
-               n.is_update,n.update_note,e.slug,e.scheduled_at,e.sort_ts
-        FROM news_items n
-        JOIN editions e ON e.id=n.edition_id
-        WHERE e.sort_ts>=?
-        ORDER BY e.sort_ts DESC,n.id DESC
-        LIMIT 500
-    """, (cutoff,)).fetchall()
-    latest = con.execute("""
-        SELECT slug,title,scheduled_at,generated_at,published_at,item_count
-        FROM editions ORDER BY sort_ts DESC,id DESC LIMIT 1
-    """).fetchone()
-    con.close()
+    store = JsonNewsStore(Path(os.environ.get("IRELAND_NEWS_JSON_DIR", BASE / "json_data")))
+    latest = store.latest()
+    due = due_slot(grace_minutes=0)
     print(json.dumps({
         "ok": True,
-        "latest": dict(latest) if latest else None,
-        "events": [dict(r) for r in rows]
+        "due_slug": due.strftime("%Y-%m-%d-%H%M"),
+        "scheduled_at": due.isoformat(),
+        "latest": {k: v for k, v in latest.items() if k != "items"} if latest else None,
+        "events": store.recent_events(cutoff, 500)
     }, ensure_ascii=False, separators=(",", ":")))
 
 if __name__ == "__main__":

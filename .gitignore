@@ -14,3 +14,8 @@ edition-*.json
 feed_url.txt
 json_data/
 .drive_bridge_state.json
+.github_bridge_state.json
+.browser_publish_token
+.generator.env
+.delivery_state.json
+outputs/
